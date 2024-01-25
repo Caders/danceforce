@@ -22,8 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <Keyboard.h>
+
 const int LedPin = 13;
-bool led = false;
+bool led = true;
 
 #define BUTTON_DEBUG 1
 //#define THRESH_DEBUG
@@ -146,40 +148,28 @@ public:
      Button constructor.
 
      adcPin - analog to digital convertor pin number
-
-     thresh - see Thresher
-
-     diffThresh - see Thresher.
-
-     joystickButton - Which joystick buton to press when this ADC pin is
-              pressed.
+     absThresh - see Thresher
+     relThresh - see Thresher.
+     letter - Which letter to press on the keyboard when activated.
   */
-  Button(int adcPin, unsigned int absThresh, long relThresh, int joystickButton) :
-    adcPin(adcPin), joystickButton(joystickButton), buttabsThresher(absThresh, relThresh)
+  Button(int adcPin, unsigned int absThresh, long relThresh, char letter) :
+    adcPin(adcPin), letter(letter), buttabsThresher(absThresh, relThresh)
   {}
 
   // Disallow copying and assignment. Prevents accidental oopsies.
   Button(const Button&) = delete;
   Button & operator=(const Button&) = delete;
 
-  /*
-     Static method to setup things before calling the update methods.
-  */
+  // LED upkeep
   static void preUpdate()
   {
     // Turn off the LED:
     led = false;
-
-#ifdef BUTTON_DEBUG
-    // Print out the time value to for the first CSV value. Note, Serial.print() 
-    // printed the wrong value.
-    Serial.printf("%lu,", millis());
-#endif
-    
+    //Serial.printf("%lu,", millis());
   }
 
   /*
-     Update method. Check the ADC, and press/unpress the button as appropirate.
+     Update method. Check the ADC, and press/unpress the key as appropirate.
   */
   void update()
   {
@@ -190,34 +180,34 @@ public:
     // Check the thresh, to see if we should turn the button on:
     bool on = buttabsThresher.next(adc);
 
-    // Set the joystick button (doesn't actually update until the postUpdate
-    // call).
-    Joystick.button(joystickButton, on);
-
+    Serial.printf("%d,", adc);
+    // Send the keypress if within threshold
+    if (on) {
+      Keyboard.press(letter);
+    }
+    else {
+      Keyboard.release(letter);
+    }
     // Update the LED state:
     led |= on;
-
-#ifdef BUTTON_DEBUG
-    // Print the ADC value:
-    Serial.printf("%d,", adc);
-#endif
   }
 
-  /*
-     Static method for after update stuff.
-  */
+  // LED upkeep
   static void postUpdate()
   {
-    // Actually update the joystick state. Sending them all at once is way faster.
-    Joystick.send_now();
-
     // Update the LED. On if something is pressed, off otherwise:
     digitalWrite(LedPin, led);
-    
-#ifdef BUTTON_DEBUG
-    // Print out the endline for the serial port CSV data:
     Serial.print("\n");
-#endif
+  }
+
+  // Output pin
+  int getPin() {
+    return adcPin;
+  }
+
+  // Output key
+  char getKey() {
+    return letter;
   }
 
 private:
@@ -225,67 +215,56 @@ private:
   // ADC pin number:
   int adcPin;
 
-  // Joystick button to press when our input button is down:
-  int joystickButton;
+  // Keyboard key to send through USB
+  int letter;
 
   // Object which does the 
   Thresher buttabsThresher;
 };
 
-
-// I have two pads. One has connections on top, and one on the side. I accidentaly
-// wired them up differently, so the have different analog input pins. Oops.
-#define PAD_WITH_TOP_CONNECTION 1
-//#define PAD_WITH_SIDE_CONNECTION
-
-// Define the buttons (analog input pin, abs thresh, rel thresh, joystick button):
-#ifdef PAD_WITH_SIDE_CONNECTION 
-Button buttons[] =
+// Define the buttons (analog input pin, abs thresh, rel thresh, keyboard key):
+const int numButtons = 5;
+Button buttons[numButtons] =
 {
-  {A0, 400, 200, 1},
-  {A2, 400, 200, 2},
-  {A3, 400, 200, 3},
-  {A5, 400, 200, 4},
-  {A6, 400, 200, 5},
-  {A8, 400, 200, 6}
+  {A1, 800, 110, 'c'}, // todo: need to test thresholds (hardware dependent)
+  {A2, 800, 110, 'v'},
+  {A3, 900, 70, 'b'},
+  {A4, 800, 110, 'n'},
+  {A5, 800, 110, 'm'},
 };
-#elif PAD_WITH_TOP_CONNECTION
-Button buttons[] =
-{
-  {A1, 400, 200, 1},
-  {A2, 400, 200, 2},
-  {A4, 400, 200, 3},
-  {A5, 400, 200, 4},
-  {A6, 400, 200, 5},
-  {A8, 400, 200, 6}
-};
-#endif
 
-// Arduion setup function
+// Arduino setup function
 void setup()
 {
   // Setup the LedPin to be an output, so we can turn the LED on/off:
   pinMode(LedPin, OUTPUT);
 
-  // Set sendstate to flase. This prevents the Joystick library from updating the state on every
-  // set button call. Those calls take like 1ms each, so let's not do that. Make one update so
-  // we only pay the price once, not once for every button.
-  Joystick.useManualSend(true);
+  // Set analog pins to input pullup resistor mode
+  for (int i = 0; i < numButtons; i++) {
+    pinMode(buttons[i].getPin(), INPUT);
+  }
+
+  // Enable the keyboard usage over USB
+  Keyboard.begin();
+
+  // Enable serial diagnostics
+  #ifdef BUTTON_DEBUG
+    // Print the ADC value:
+    Serial.begin(9600);
+  #endif
 }
 
 void loop()
 {
-  // Do the pre-udpate step:
+  // Do the pre-update step:
   Button::preUpdate();
 
-  // Loop over the buttons, and update each one. Don't forget the &! Without that, instead of
-  // a reference, we get a copy of the buttons. Since our buttons need to store state in their
-  // delay line, calling update on a copy is no good, since the copy gets updated, instead of
-  // the real object. I spent like half a day realizing that. I should make the copy
-  // constructors private.
-  for (auto& button : buttons)
+  // Loop over the buttons, and update each one. Make sure to pass buttons by reference.
+  for (auto& button : buttons) {
+    Serial.print(button.getKey()); // show button presses for debugging
     button.update();
-
+    //delay(1000); debug delay
+  }
   // Post-update step:
   Button::postUpdate();
 }
